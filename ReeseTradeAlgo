@@ -1,0 +1,164 @@
+import pandas as pd
+import ta
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.impute import SimpleImputer
+import threading
+import time
+import requests
+
+# Alpha Vantage API key
+API_KEY = '4CSSOMSB83RFQAHB'
+
+# Function to fetch real-time data from Alpha Vantage
+def fetch_realtime_data(symbol):
+    try:
+        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval=5min&apikey={API_KEY}"
+        response = requests.get(url)
+        data = response.json()
+        latest_data = list(data['Time Series (5min)'].values())[0]
+        close_price = float(latest_data['4. close'])
+        return close_price
+    except Exception as e:
+        print("Error fetching real-time data:", e)
+        return None
+
+# Simulated Brokerage API module (replace with actual brokerage API)
+class SimulatedBrokerAPI:
+    def __init__(self):
+        self.account_balance = 10000.0
+        self.positions = {'AAPL': 0}
+    
+    def get_account_balance(self):
+        return self.account_balance
+    
+    def get_positions(self):
+        return self.positions
+    
+    def execute_order(self, symbol, quantity, side):
+        if side == 'buy':
+            cost = quantity * self.get_current_price(symbol)
+            if cost > self.account_balance:
+                print("Insufficient funds to buy.")
+                return False
+            else:
+                self.positions[symbol] += quantity
+                self.account_balance -= cost
+                print(f"Bought {quantity} shares of {symbol} at ${self.get_current_price(symbol)} each.")
+                return True
+        elif side == 'sell':
+            if symbol in self.positions and self.positions[symbol] >= quantity:
+                revenue = quantity * self.get_current_price(symbol)
+                self.positions[symbol] -= quantity
+                self.account_balance += revenue
+                print(f"Sold {quantity} shares of {symbol} at ${self.get_current_price(symbol)} each.")
+                return True
+            else:
+                print(f"Insufficient shares of {symbol} to sell.")
+                return False
+    
+    def get_current_price(self, symbol):
+        # Simulated current price (replace with real-time data)
+        return fetch_realtime_data(symbol)
+
+class ReeseLiveTrade:
+    def __init__(self, broker_api):
+        self.model = None
+        self.broker_api = broker_api
+        self.is_trading = False
+
+    def fetch_realtime_data(self):
+        # Fetch real-time data for AAPL from Alpha Vantage
+        close_price = fetch_realtime_data('AAPL')
+        if close_price is not None:
+            return pd.DataFrame({'4. close': [close_price]}, index=[pd.Timestamp.now()])
+        else:
+            return None
+
+    def calculate_realtime_indicators(self, df):
+        # Calculate technical indicators in real-time based on the streaming data
+        if df is not None:
+            df['macd'] = ta.trend.macd(df['4. close'])
+            df['rsi'] = ta.momentum.rsi(df['4. close'])
+            df['stoch'] = ta.momentum.stoch(df['4. close'], df['4. close'], df['4. close'])
+            df['bb_bbm'], df['bb_bbh'], df['bb_bbl'] = ta.volatility.bollinger_mavg(df['4. close']), ta.volatility.bollinger_hband(df['4. close']), ta.volatility.bollinger_lband(df['4. close'])
+            return df
+        else:
+            return None
+
+    def make_trading_decision(self, df):
+        # Make trading decision based on the current state of the technical indicators
+        if self.model is not None and df is not None:
+            prediction = self.model.predict(df)
+            return prediction[0]
+        else:
+            return None
+
+    def execute_trade(self, decision):
+        # Execute trade based on the trading decision
+        if decision == 1:
+            self.broker_api.execute_order('AAPL', 1, 'buy')
+        elif decision == -1:
+            self.broker_api.execute_order('AAPL', 1, 'sell')
+
+    def start_trading(self):
+        self.is_trading = True
+        while self.is_trading:
+            try:
+                # Fetch real-time data
+                df = self.fetch_realtime_data()
+                
+                # Calculate real-time indicators
+                df = self.calculate_realtime_indicators(df)
+                
+                # Make trading decision
+                decision = self.make_trading_decision(df)
+                
+                if decision is not None:
+                    # Execute
+                    self.execute_trade(decision)
+            except Exception as e:
+                print("Error during trading:", e)
+            # Sleep for 5 minutes before fetching data again
+            time.sleep(300)
+
+# Load historical data for training the model
+historical_data = pd.read_csv('/storage/emulated/0/Download/aapl_us_d.csv')
+
+# Drop missing values and reset index
+historical_data.dropna(inplace=True)
+historical_data.reset_index(drop=True, inplace=True)
+
+# Calculate technical indicators
+historical_data['macd'] = ta.trend.macd(historical_data['Close'])
+historical_data['rsi'] = ta.momentum.rsi(historical_data['Close'])
+historical_data['stoch'] = ta.momentum.stoch(historical_data['High'], historical_data['Low'], historical_data['Close'])
+historical_data['bb_bbm'], historical_data['bb_bbh'], historical_data['bb_bbl'] = ta.volatility.bollinger_mavg(historical_data['Close']), ta.volatility.bollinger_hband(historical_data['Close']), ta.volatility.bollinger_lband(historical_data['Close'])
+
+# Define features and target variable
+X = historical_data[['macd', 'rsi', 'stoch', 'bb_bbm', 'bb_bbh', 'bb_bbl']]
+y = (historical_data['Close'].shift(-1) > historical_data['Close']).astype(int)
+
+# Split data into train and test sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Impute missing values in features
+imputer = SimpleImputer()
+X_train_imputed = imputer.fit_transform(X_train)
+X_test_imputed = imputer.transform(X_test)
+
+# Initialize Random Forest classifier
+rf_classifier = RandomForestClassifier(n_estimators=100, random_state=42)
+
+# Train the model
+rf_classifier.fit(X_train_imputed, y_train)
+
+# Initialize ReeseLiveTrade object
+live_trader = ReeseLiveTrade(broker_api)
+
+# Set the trained model
+live_trader.model = rf_classifier
+
+# Start trading
+trading_thread = threading.Thread(target=live_trader.start_trading)
+trading_thread.start()
