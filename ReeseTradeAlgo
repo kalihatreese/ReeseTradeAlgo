@@ -8,7 +8,7 @@ import time
 import requests
 
 # Alpha Vantage API key
-API_KEY = '4CSSOMSB83RFQAHB'
+API_KEY = 'your_api_key'
 
 # Function to fetch real-time data from Alpha Vantage
 def fetch_realtime_data(symbol):
